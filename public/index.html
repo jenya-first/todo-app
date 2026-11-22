@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Список дел</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1c1f24; --muted:#6b7280; --accent:#2563eb; --danger:#dc2626; --border:#e5e7eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --card:#1b1f25; --fg:#e8eaed; --muted:#9aa1ab; --accent:#60a5fa; --danger:#f87171; --border:#2c323a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:720px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:1.5rem; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
+  form, .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text], input[type=password] { flex:1 1 180px; min-width:0; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:transparent; color:inherit; font:inherit; }
+  button { padding:8px 12px; border:1px solid var(--border); border-radius:6px; background:var(--card); color:inherit; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  label { color:var(--muted); font-size:.9rem; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--border); }
+  li:first-child { border-top:0; }
+  li .title { flex:1; min-width:0; overflow-wrap:anywhere; }
+  li.done .title { text-decoration:line-through; color:var(--muted); }
+  .muted { color:var(--muted); font-size:.9rem; }
+  #error { color:var(--danger); min-height:1.4em; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Список дел</h1>
+
+  <section class="card" id="authBox">
+    <form id="tokenForm">
+      <input type="password" id="token" placeholder="API-токен" autocomplete="off" required>
+      <button class="primary">Войти</button>
+    </form>
+  </section>
+
+  <section id="appBox" hidden>
+    <div class="card row">
+      <div style="flex:1">
+        <div><strong id="authorName"></strong></div>
+        <div class="muted">Логин Moodle: <span id="authorLogin"></span></div>
+      </div>
+      <button id="logout">Выйти</button>
+    </div>
+
+    <div class="card">
+      <form id="runForm">
+        <label for="runId">runId</label>
+        <input type="text" id="runId" value="manual" pattern="[A-Za-z0-9_\-]{1,64}" required>
+        <button>Показать</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <form id="addForm">
+        <input type="text" id="newTitle" placeholder="Новое дело" maxlength="200" required>
+        <button class="primary">Добавить</button>
+      </form>
+    </div>
+
+    <div class="card"><ul id="list"></ul><p class="muted" id="empty" hidden>Дел нет</p></div>
+  </section>
+
+  <p id="error" role="alert"></p>
+</main>
+
+<script src="config.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const base = (window.API_BASE || '').replace(/\/$/, '');
+let token = sessionStorage.getItem('token') || '';
+
+async function api(method, path, body) {
+  const res = await fetch(base + path, {
+    method,
+    headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { logout(); throw new Error('Неверный токен'); }
+  const data = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw new Error(data?.error || 'HTTP ' + res.status);
+  return data;
+}
+
+function showError(e) { $('error').textContent = e ? e.message : ''; }
+const run = (fn) => async (...a) => { showError(); try { await fn(...a); } catch (e) { showError(e); } };
+
+function logout() {
+  token = ''; sessionStorage.removeItem('token');
+  $('appBox').hidden = true; $('authBox').hidden = false;
+}
+
+async function login() {
+  const a = await api('GET', '/api/author/');
+  $('authorName').textContent = a.fullName;
+  $('authorLogin').textContent = a.login;
+  sessionStorage.setItem('token', token);
+  $('authBox').hidden = true; $('appBox').hidden = false;
+  await load();
+}
+
+function render(tasks) {
+  const ul = $('list'); ul.replaceChildren();
+  $('empty').hidden = tasks.length > 0;
+  for (const t of tasks) {
+    const li = document.createElement('li');
+    li.className = t.done ? 'done' : '';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = t.done; cb.ariaLabel = 'Выполнено';
+    cb.onchange = run(async () => { await api('PATCH', `/api/tasks/${t.id}/`, { done: cb.checked }); await load(); });
+    const span = document.createElement('span');
+    span.className = 'title'; span.textContent = t.title;
+    const edit = document.createElement('button');
+    edit.textContent = 'Изменить';
+    edit.onclick = run(async () => {
+      const title = prompt('Новое название', t.title);
+      if (title === null) return;
+      await api('PATCH', `/api/tasks/${t.id}/`, { title }); await load();
+    });
+    const del = document.createElement('button');
+    del.className = 'danger'; del.textContent = 'Удалить';
+    del.onclick = run(async () => {
+      if (!confirm('Удалить «' + t.title + '»?')) return;
+      await api('DELETE', `/api/tasks/${t.id}/`); await load();
+    });
+    li.append(cb, span, edit, del);
+    ul.append(li);
+  }
+}
+
+async function load() {
+  render(await api('GET', '/api/tasks/?runId=' + encodeURIComponent($('runId').value)));
+}
+
+$('tokenForm').onsubmit = run(async (e) => { e.preventDefault(); token = $('token').value.trim(); $('token').value = ''; await login(); });
+$('runForm').onsubmit = run(async (e) => { e.preventDefault(); await load(); });
+$('addForm').onsubmit = run(async (e) => {
+  e.preventDefault();
+  await api('POST', '/api/tasks/', { title: $('newTitle').value, runId: $('runId').value });
+  $('newTitle').value = ''; await load();
+});
+$('logout').onclick = logout;
+if (token) run(login)();
+</script>
+</body>
+</html>

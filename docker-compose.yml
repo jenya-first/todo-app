@@ -1,0 +1,14 @@
+services:
+  todo-api:
+    container_name: todo-api
+    image: ${IMAGE:-jenya00/todo-express:1.0.0}
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      mydockernet:
+        ipv4_address: ${TODO_API_IP:-175.0.0.10}
+
+networks:
+  mydockernet:
+    external: true
